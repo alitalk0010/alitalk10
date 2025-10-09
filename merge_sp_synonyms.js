@@ -1,18 +1,14 @@
-// scripts/bulk_merge_by_sid_sp_c.js
-// 사용 예:
-// 1) 드라이런: node scripts/bulk_merge_by_sid_sp_c.js --dry-run
-// 2) 실제반영: node scripts/bulk_merge_by_sid_sp_c.js
-// 3) 일부만:    node scripts/bulk_merge_by_sid_sp_c.js --limit 500
-
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import dbConnect from "./utils/dbConnect.js";
 import ProductDetail from "./models/ProductDetail.js";
+import { translateSkuPropertiesSimple } from "./utils/skuTranslate.js";
 
 dotenv.config();
 
 const args = process.argv.slice(2);
 const dryRun = args.includes("--dry-run");
+
 const limit = (() => {
   const byEq = args.find((a) => a.startsWith("--limit="));
   if (byEq) return Number(byEq.split("=")[1]) || 0;
@@ -28,7 +24,10 @@ const SYNONYM_KEY_MAP = { 색깔: "색상" };
 // ─────────────────────────────────────────────────────────────────────────────
 // 비교용 정규화: 지정 특수문자 + 공백 제거
 function stripForCompare(s) {
-  return String(s ?? "").replace(/[{}\[\]\(\)\"\s]/g, "");
+  const a = String(s ?? "").replace(/[{}\[\]\(\)\"\s]/g, "");
+  const trans = translateSkuPropertiesSimple(a);
+  console.log("trans:", trans);
+  return trans;
 }
 
 // c 필드 비교용 정규화
@@ -41,7 +40,8 @@ function normalizeSpForCompare(spStr) {
   if (typeof spStr !== "string") return stripForCompare(spStr);
   // 1) JSON 파싱 시도
   try {
-    let arr = JSON.parse(spStr);
+    const trans = stripForCompare(spStr);
+    let arr = JSON.parse(trans);
     if (!Array.isArray(arr)) arr = [arr];
     // 2) 동의어 키 매핑 (선택)
     const mapped = arr.map((obj) => {
@@ -125,6 +125,8 @@ async function processOneDoc(doc) {
     if (!sid) continue; // sId 없는 비정상은 병합 대상 제외
     const cNorm = normalizeCForCompare(it?.c ?? "");
     const spNorm = normalizeSpForCompare(it?.sp ?? "");
+    console.log("cNorm:", cNorm);
+    console.log("spNorm:", spNorm);
     const key = `${sid}||${cNorm}||${spNorm}`;
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push(it);
@@ -184,12 +186,9 @@ async function main() {
     `🚀 Bulk merge by (sId,c,sp) 시작 (dry-run: ${dryRun ? "YES" : "NO"})`
   );
 
-  const query = {};
+  const query = { _id: "1005008077615451" };
   const projection = { "sku_info.sil": 1 };
-  const cursor = ProductDetail.find(
-    { _id: "1005008217692752" },
-    projection
-  ).cursor();
+  const cursor = ProductDetail.find(query, projection).cursor();
 
   let visited = 0;
   let changedDocs = 0;
@@ -214,14 +213,12 @@ async function main() {
   }
 
   console.log("\n===== SUMMARY =====");
-  console.log(`Visited docs   : ${visited}`);
-  console.log(`Changed docs   : ${changedDocs}`);
-  console.log(`Rows deleted   : ${totalRowsDeleted}`);
+  console.log(`Visited docs : ${visited}`);
+  console.log(`Changed docs : ${changedDocs}`);
+  console.log(`Rows deleted : ${totalRowsDeleted}`);
   console.log(`pd added (keys): ${totalPdAdded}`);
-  console.log(`Groups merged  : ${totalGroupsMerged}`);
-  console.log(
-    `Mode           : ${dryRun ? "DRY-RUN (no save)" : "APPLY (saved)"}`
-  );
+  console.log(`Groups merged : ${totalGroupsMerged}`);
+  console.log(` Mode : ${dryRun ? "DRY-RUN (no save)" : "APPLY (saved)"}`);
 
   await mongoose.connection.close();
 }
